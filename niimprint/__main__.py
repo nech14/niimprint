@@ -75,8 +75,10 @@ def print_cmd(model, conn, addr, density, rotate, image, verbose):
 
     if model in ("b1", "b18", "b21"):
         max_width_px = 384
+        max_height_px = 230 # assume 3x5 stickers
     if model in ("d11", "d110"):
         max_width_px = 96
+        max_height_px = 57 # assume 3x5 stickers
 
     if model in ("b18", "d11", "d110") and density > 3:
         logging.warning(f"{model.upper()} only supports density up to 3")
@@ -86,11 +88,40 @@ def print_cmd(model, conn, addr, density, rotate, image, verbose):
     if rotate != "0":
         # PIL library rotates counter clockwise, so we need to multiply by -1
         image = image.rotate(-int(rotate), expand=True)
-    assert image.width <= max_width_px, f"Image width too big for {model.upper()}"
-
+    if max_width_px < image.size[0]:
+        ratio = max_width_px / image.size[0] * 0.98
+        nwidth = int(image.size[0] * ratio)
+        nheight = int(image.size[1] * ratio)
+        image.thumbnail((nwidth, nheight), Image.Resampling.LANCZOS)
+    #assert image.width <= max_width_px, f"Image width too big for {model.upper()}"
+    print(image.size)
+    image = place_on_white_background(image, max_width_px, max_height_px)
+    print(image.size)
     printer = PrinterClient(transport)
     printer.print_image(image, density=density)
 
+def place_on_white_background(image: Image, width: int, height: int) -> Image.Image:
+    """
+    Places the given image in the center of a white background of fixed size.
+
+    :param image: PIL Image already opened
+    :param width: Width of the background
+    :param height: Height of the background
+    :return: New PIL Image with the image centered on white background
+    """
+    # Create white background
+    background = Image.new("RGB", (width, height), (255, 255, 255))
+
+    # Get size of original image
+    img_w, img_h = image.size
+
+    # Compute top-left corner for centering
+    offset = ((width - img_w) // 2, (height - img_h + 8) // 2)
+
+    # Paste the image onto the background
+    background.paste(image, offset)
+
+    return background
 
 if __name__ == "__main__":
     print_cmd()

@@ -111,7 +111,7 @@ class PrinterClient:
         for pkt in self._encode_image(image):
             self._send(pkt)
         self.end_page_print()
-        time.sleep(0.3)  # FIXME: Check get_print_status()
+        time.sleep(1)  # FIXME: Check get_print_status()
         while not self.end_print():
             time.sleep(0.1)
 
