@@ -1,13 +1,19 @@
 import logging
 import re
+import asyncio
 
 import click
 from PIL import Image
 
-from niimprint import BluetoothTransport, PrinterClient, SerialTransport
+from niimprint import PrinterClient, SerialTransport
+from niimprint.check_bluetooth import list_ble_devices
+from niimprint.transports.bluetooth import BluetoothTransport  # напрямую, чтобы убрать circular import
 
+@click.group()
+def cli():
+    pass
 
-@click.command("print")
+@cli.command("print")
 @click.option(
     "-m",
     "--model",
@@ -58,6 +64,7 @@ from niimprint import BluetoothTransport, PrinterClient, SerialTransport
     is_flag=True,
     help="Enable verbose logging",
 )
+
 def print_cmd(model, conn, addr, density, rotate, image, verbose):
     logging.basicConfig(
         level="DEBUG" if verbose else "INFO",
@@ -98,8 +105,28 @@ def print_cmd(model, conn, addr, density, rotate, image, verbose):
     image = place_on_white_background(image, max_width_px, max_height_px)
     print(image.size)
     printer = PrinterClient(transport)
+    # printer.print_image(image, density=density)
 
-    printer.print_image(image, density=density)
+    async def run_print():
+        if conn == "usb":
+            # синхронная печать через USB
+            await printer.print_image(image, density=density)
+        else:
+            # асинхронная печать через Bluetooth
+            await printer.print_image(image, density=density)
+            await transport.disconnect()
+
+
+    asyncio.run(run_print())
+
+@cli.command("devices")
+def devices_cmd():
+    async def run():
+        await list_ble_devices()
+
+    asyncio.run(run())
+
+
 
 def place_on_white_background(image: Image, width: int, height: int) -> Image.Image:
     """
@@ -125,4 +152,4 @@ def place_on_white_background(image: Image, width: int, height: int) -> Image.Im
     return background
 
 if __name__ == "__main__":
-    print_cmd()
+    cli()

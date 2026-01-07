@@ -20,7 +20,7 @@ class SerialTransport(BaseTransport):
             raise RuntimeError(msg)
         return all_ports[0][0]
 
-    def read(self, length: int) -> bytes:
+    def read(self, length: int = 1024) -> bytes:
         return self._serial.read(length)
 
     def write(self, data: bytes):

@@ -1,13 +1,14 @@
+import asyncio
 import logging
 import math
 import struct
-import time
 
 from PIL import Image, ImageOps
 
-from niimprint.enums.info import InfoEnum
+
 from niimprint.enums.request import RequestCodeEnum
 from niimprint.packet import NiimbotPacket
+from niimprint.transports import BluetoothTransport
 
 logger = logging.getLogger("BluetoothTransport")
 
@@ -17,30 +18,33 @@ def _packet_to_int(x):
 
 
 class PrinterClient:
-    def __init__(self, transport):
+    """Асинхронный клиент для B21S через BLE."""
+    def __init__(self, transport: BluetoothTransport):
         self._transport = transport
         self._packetbuf = bytearray()
 
-    def print_image(self, image: Image, density: int = 3):
-        self.set_label_density(density)
-        self.set_label_type(1)
+    async def print_image(self, image: Image.Image, density: int = 3):
+        # await self._transport.handshake()
 
-        self.start_print()
+        await self.set_label_density(density)
+        await self.set_label_type(1)
 
-        self.start_page_print()
-        self.set_dimension(image.height, image.width)
-        # self.set_quantity(2)  # Same thing (B21)
+        await self.start_print()
+        await self.start_page_print()
+        await self.set_dimension(image.height, image.width)
+
         for pkt in self._encode_image(image):
-            self._send(pkt)
-            time.sleep(0.01)
+            await self._send(pkt)
+            await asyncio.sleep(0.01)
 
-        time.sleep(1)
-        self.end_page_print()
-        status = self.get_print_status()
-        self._log_buffer(str(status), bytes(1))
-        time.sleep(1)  # FIXME: Check get_print_status()
-        while not self.end_print():
-            time.sleep(0.1)
+        await asyncio.sleep(1)
+        await self.end_page_print()
+        status = await self.get_print_status()
+        self._log_buffer(str(status), b"")
+        await asyncio.sleep(1)
+
+        while not await self.end_print():
+            await asyncio.sleep(0.1)
 
     def _encode_image(self, image: Image):
         img = ImageOps.invert(image.convert("L")).convert("1")
@@ -53,9 +57,15 @@ class PrinterClient:
             pkt = NiimbotPacket(0x85, header + line_data)
             yield pkt
 
-    def _recv(self):
+    async def _recv(self):
+        transport = self._transport
+        if isinstance(transport, BluetoothTransport):
+            data = await self._transport.read()
+        else:
+            data = await asyncio.to_thread(self._transport.read, 1024)
+
+        self._packetbuf.extend(data)
         packets = []
-        self._packetbuf.extend(self._transport.read(1024))
         while len(self._packetbuf) > 4:
             pkt_len = self._packetbuf[3] + 7
             if len(self._packetbuf) >= pkt_len:
@@ -63,155 +73,76 @@ class PrinterClient:
                 self._log_buffer("recv", packet.to_bytes())
                 packets.append(packet)
                 del self._packetbuf[:pkt_len]
+            else:
+                break
         return packets
 
-    def _send(self, packet):
-        self._transport.write(packet.to_bytes())
+    async def _send(self, packet: NiimbotPacket):
+        transport = self._transport
+        if isinstance(transport, BluetoothTransport):
+            await self._transport.write(packet.to_bytes())
+        else:
+            await asyncio.to_thread(self._transport.write, packet.to_bytes())
+
 
     def _log_buffer(self, prefix: str, buff: bytes):
-        msg = ":".join(f"{i:#04x}"[-2:] for i in buff)
-        logging.debug(f"{prefix}: {msg}")
+        msg = ":".join(f"{b:02x}" for b in buff)
+        logger.debug(f"{prefix}: {msg}")
 
-    def _transceive(self, reqcode, data, respoffset=1):
+    async def _transceive(self, reqcode, data, respoffset=1):
         respcode = respoffset + reqcode
-        packet = NiimbotPacket(reqcode, data)
+        packet  = NiimbotPacket(reqcode, data)
         self._log_buffer("send", packet.to_bytes())
-        self._send(packet)
+        await self._send(packet )
+
         resp = None
         for _ in range(6):
-            for packet in self._recv():
-                if packet.type == 219:
-                    raise ValueError
+            packets = await self._recv()
+            for p in packets:
+                if p.type == 219:
+                    raise ValueError("Printer error")
                 elif packet.type == 0:
                     raise NotImplementedError
-                elif packet.type == respcode:
-                    resp = packet
+                elif p.type == respcode:
+                    resp = p
             if resp:
                 return resp
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
         return resp
 
-    def get_info(self, key):
-        if packet := self._transceive(RequestCodeEnum.GET_INFO, bytes((key,)), key):
-            match key:
-                case InfoEnum.DEVICESERIAL:
-                    return packet.data.hex()
-                case InfoEnum.SOFTVERSION:
-                    return _packet_to_int(packet) / 100
-                case InfoEnum.HARDVERSION:
-                    return _packet_to_int(packet) / 100
-                case _:
-                    return _packet_to_int(packet)
-        else:
-            return None
 
-    def get_rfid(self):
-        packet = self._transceive(RequestCodeEnum.GET_RFID, b"\x01")
-        data = packet.data
 
-        if data[0] == 0:
-            return None
-        uuid = data[0:8].hex()
-        idx = 8
+    async def set_label_type(self, n):
+        pkt = await self._transceive(RequestCodeEnum.SET_LABEL_TYPE, bytes([n]), 16)
+        return bool(pkt.data[0]) if pkt else True  # B21S может не присылать ответ
 
-        barcode_len = data[idx]
-        idx += 1
-        barcode = data[idx: idx + barcode_len].decode()
+    async def set_label_density(self, n):
+        pkt = await self._transceive(RequestCodeEnum.SET_LABEL_DENSITY, bytes([n]), 16)
+        return bool(pkt.data[0]) if pkt else True
 
-        idx += barcode_len
-        serial_len = data[idx]
-        idx += 1
-        serial = data[idx: idx + serial_len].decode()
+    async def start_print(self):
+        pkt = await self._transceive(RequestCodeEnum.START_PRINT, b"\x01")
+        return bool(pkt.data[0]) if pkt else True
 
-        idx += serial_len
-        total_len, used_len, type_ = struct.unpack(">HHB", data[idx:])
-        return {
-            "uuid": uuid,
-            "barcode": barcode,
-            "serial": serial,
-            "used_len": used_len,
-            "total_len": total_len,
-            "type": type_,
-        }
+    async def end_print(self):
+        pkt = await self._transceive(RequestCodeEnum.END_PRINT, b"\x01")
+        return bool(pkt.data[0]) if pkt else True
 
-    def heartbeat(self):
-        packet = self._transceive(RequestCodeEnum.HEARTBEAT, b"\x01")
-        closingstate = None
-        powerlevel = None
-        paperstate = None
-        rfidreadstate = None
+    async def start_page_print(self):
+        pkt = await self._transceive(RequestCodeEnum.START_PAGE_PRINT, b"\x01")
+        return bool(pkt.data[0]) if pkt else True
 
-        match len(packet.data):
-            case 20:
-                paperstate = packet.data[18]
-                rfidreadstate = packet.data[19]
-            case 13:
-                closingstate = packet.data[9]
-                powerlevel = packet.data[10]
-                paperstate = packet.data[11]
-                rfidreadstate = packet.data[12]
-            case 19:
-                closingstate = packet.data[15]
-                powerlevel = packet.data[16]
-                paperstate = packet.data[17]
-                rfidreadstate = packet.data[18]
-            case 10:
-                closingstate = packet.data[8]
-                powerlevel = packet.data[9]
-                rfidreadstate = packet.data[8]
-            case 9:
-                closingstate = packet.data[8]
+    async def end_page_print(self):
+        pkt = await self._transceive(RequestCodeEnum.END_PAGE_PRINT, b"\x01")
+        return bool(pkt.data[0]) if pkt else True
 
-        return {
-            "closingstate": closingstate,
-            "powerlevel": powerlevel,
-            "paperstate": paperstate,
-            "rfidreadstate": rfidreadstate,
-        }
+    async def set_dimension(self, w, h):
+        pkt = await self._transceive(RequestCodeEnum.SET_DIMENSION, struct.pack(">HH", w, h))
+        return bool(pkt.data[0]) if pkt else True
 
-    def set_label_type(self, n):
-        assert 1 <= n <= 3
-        packet = self._transceive(RequestCodeEnum.SET_LABEL_TYPE, bytes((n,)), 16)
-        return bool(packet.data[0])
-
-    def set_label_density(self, n):
-        assert 1 <= n <= 5  # B21 has 5 levels, not sure for D11
-        packet = self._transceive(RequestCodeEnum.SET_LABEL_DENSITY, bytes((n,)), 16)
-        return bool(packet.data[0])
-
-    def start_print(self):
-        packet = self._transceive(RequestCodeEnum.START_PRINT, b"\x01")
-        return bool(packet.data[0])
-
-    def end_print(self):
-        packet = self._transceive(RequestCodeEnum.END_PRINT, b"\x01")
-        return bool(packet.data[0])
-
-    def start_page_print(self):
-        packet = self._transceive(RequestCodeEnum.START_PAGE_PRINT, b"\x01")
-        return bool(packet.data[0])
-
-    def end_page_print(self):
-        packet = self._transceive(RequestCodeEnum.END_PAGE_PRINT, b"\x01")
-        return bool(packet.data[0])
-
-    def allow_print_clear(self):
-        packet = self._transceive(RequestCodeEnum.ALLOW_PRINT_CLEAR, b"\x01", 16)
-        return bool(packet.data[0])
-
-    def set_dimension(self, w, h):
-        packet = self._transceive(
-            RequestCodeEnum.SET_DIMENSION, struct.pack(">HH", w, h)
-        )
-        return bool(packet.data[0])
-
-    def set_quantity(self, n):
-        packet = self._transceive(RequestCodeEnum.SET_QUANTITY, struct.pack(">H", n))
-        return bool(packet.data[0])
-
-    def get_print_status(self):
-        packet = self._transceive(RequestCodeEnum.GET_PRINT_STATUS, b"\x01", 16)
-        if packet is None or len(packet.data) < 4:
+    async def get_print_status(self):
+        pkt = await self._transceive(RequestCodeEnum.GET_PRINT_STATUS, b"\x01", 16)
+        if pkt is None or len(pkt.data) < 4:
             return {"page": 0, "progress1": 0, "progress2": 0}
-        page, progress1, progress2 = struct.unpack(">HBB", packet.data[:4])
+        page, progress1, progress2 = struct.unpack(">HBB", pkt.data[:4])
         return {"page": page, "progress1": progress1, "progress2": progress2}
