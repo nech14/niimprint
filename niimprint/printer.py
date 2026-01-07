@@ -1,98 +1,19 @@
-import abc
-import enum
 import logging
 import math
-import socket
 import struct
 import time
 
-import serial
 from PIL import Image, ImageOps
-from serial.tools.list_ports import comports as list_comports
 
+from niimprint.enums.info import InfoEnum
+from niimprint.enums.request import RequestCodeEnum
 from niimprint.packet import NiimbotPacket
 
-
-class InfoEnum(enum.IntEnum):
-    DENSITY = 1
-    PRINTSPEED = 2
-    LABELTYPE = 3
-    LANGUAGETYPE = 6
-    AUTOSHUTDOWNTIME = 7
-    DEVICETYPE = 8
-    SOFTVERSION = 9
-    BATTERY = 10
-    DEVICESERIAL = 11
-    HARDVERSION = 12
-
-
-class RequestCodeEnum(enum.IntEnum):
-    GET_INFO = 64  # 0x40
-    GET_RFID = 26  # 0x1A
-    HEARTBEAT = 220  # 0xDC
-    SET_LABEL_TYPE = 35  # 0x23
-    SET_LABEL_DENSITY = 33  # 0x21
-    START_PRINT = 1  # 0x01
-    END_PRINT = 243  # 0xF3
-    START_PAGE_PRINT = 3  # 0x03
-    END_PAGE_PRINT = 227  # 0xE3
-    ALLOW_PRINT_CLEAR = 32  # 0x20
-    SET_DIMENSION = 19  # 0x13
-    SET_QUANTITY = 21  # 0x15
-    GET_PRINT_STATUS = 163  # 0xA3
+logger = logging.getLogger("BluetoothTransport")
 
 
 def _packet_to_int(x):
     return int.from_bytes(x.data, "big")
-
-
-class BaseTransport(metaclass=abc.ABCMeta):
-    @abc.abstractmethod
-    def read(self, length: int) -> bytes:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def write(self, data: bytes):
-        raise NotImplementedError
-
-
-class BluetoothTransport(BaseTransport):
-    def __init__(self, address: str):
-        self._sock = socket.socket(
-            socket.AF_BLUETOOTH,
-            socket.SOCK_STREAM,
-            socket.BTPROTO_RFCOMM,
-        )
-        self._sock.connect((address, 1))
-
-    def read(self, length: int) -> bytes:
-        return self._sock.recv(length)
-
-    def write(self, data: bytes):
-        return self._sock.send(data)
-
-
-class SerialTransport(BaseTransport):
-    def __init__(self, port: str = "auto"):
-        port = port if port != "auto" else self._detect_port()
-        self._serial = serial.Serial(port=port, baudrate=115200, timeout=0.5)
-
-    def _detect_port(self):
-        all_ports = list(list_comports())
-        if len(all_ports) == 0:
-            raise RuntimeError("No serial ports detected")
-        if len(all_ports) > 1:
-            msg = "Too many serial ports, please select specific one:"
-            for port, desc, hwid in all_ports:
-                msg += f"\n- {port} : {desc} [{hwid}]"
-            raise RuntimeError(msg)
-        return all_ports[0][0]
-
-    def read(self, length: int) -> bytes:
-        return self._serial.read(length)
-
-    def write(self, data: bytes):
-        return self._serial.write(data)
 
 
 class PrinterClient:
@@ -103,14 +24,20 @@ class PrinterClient:
     def print_image(self, image: Image, density: int = 3):
         self.set_label_density(density)
         self.set_label_type(1)
+
         self.start_print()
-        # self.allow_print_clear()  # Something unsupported in protocol decoding (B21)
+
         self.start_page_print()
         self.set_dimension(image.height, image.width)
-        # self.set_quantity(1)  # Same thing (B21)
+        # self.set_quantity(2)  # Same thing (B21)
         for pkt in self._encode_image(image):
             self._send(pkt)
+            time.sleep(0.01)
+
+        time.sleep(1)
         self.end_page_print()
+        status = self.get_print_status()
+        self._log_buffer(str(status), bytes(1))
         time.sleep(1)  # FIXME: Check get_print_status()
         while not self.end_print():
             time.sleep(0.1)
@@ -189,12 +116,12 @@ class PrinterClient:
 
         barcode_len = data[idx]
         idx += 1
-        barcode = data[idx : idx + barcode_len].decode()
+        barcode = data[idx: idx + barcode_len].decode()
 
         idx += barcode_len
         serial_len = data[idx]
         idx += 1
-        serial = data[idx : idx + serial_len].decode()
+        serial = data[idx: idx + serial_len].decode()
 
         idx += serial_len
         total_len, used_len, type_ = struct.unpack(">HHB", data[idx:])
@@ -284,5 +211,7 @@ class PrinterClient:
 
     def get_print_status(self):
         packet = self._transceive(RequestCodeEnum.GET_PRINT_STATUS, b"\x01", 16)
-        page, progress1, progress2 = struct.unpack(">HBB", packet.data)
+        if packet is None or len(packet.data) < 4:
+            return {"page": 0, "progress1": 0, "progress2": 0}
+        page, progress1, progress2 = struct.unpack(">HBB", packet.data[:4])
         return {"page": page, "progress1": progress1, "progress2": progress2}

@@ -20,5 +20,6 @@ async def check_bluetooth_connection(device_address):
 
 if __name__ == "__main__":
     # Replace with the actual address of your Bluetooth device
-    target_device_address = "XX:XX:XX:XX:XX:XX"  # Example: "A1:B2:C3:D4:E5:F6" or a UUID
+    # target_device_address = "XX:XX:XX:XX:XX:XX"  # Example: "A1:B2:C3:D4:E5:F6" or a UUID
+    target_device_address = "03:08:13:07:15:85"  # Example: "A1:B2:C3:D4:E5:F6" or a UUID
     asyncio.run(check_bluetooth_connection(target_device_address))

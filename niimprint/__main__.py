@@ -98,6 +98,7 @@ def print_cmd(model, conn, addr, density, rotate, image, verbose):
     image = place_on_white_background(image, max_width_px, max_height_px)
     print(image.size)
     printer = PrinterClient(transport)
+
     printer.print_image(image, density=density)
 
 def place_on_white_background(image: Image, width: int, height: int) -> Image.Image:

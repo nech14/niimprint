@@ -1,0 +1,14 @@
+import enum
+
+
+class InfoEnum(enum.IntEnum):
+    DENSITY = 1
+    PRINTSPEED = 2
+    LABELTYPE = 3
+    LANGUAGETYPE = 6
+    AUTOSHUTDOWNTIME = 7
+    DEVICETYPE = 8
+    SOFTVERSION = 9
+    BATTERY = 10
+    DEVICESERIAL = 11
+    HARDVERSION = 12
