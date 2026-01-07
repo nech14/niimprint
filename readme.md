@@ -62,7 +62,7 @@ To identify which address is the correct one, run `bluetoothctl info` on the add
 **B21, USB connection, 30x15 mm (240x120 px) label**
 
 ```
-python niimprint -c usb -a /dev/ttyACM0 -r 90 -i examples/B21_30x15mm_240x120px.png
+python niimprint print -c usb -a /dev/ttyACM0 -r 90 -i examples/B21_30x15mm_240x120px.png
 ```
 
 [![](examples/B21_30x15_result.png)]()
@@ -70,10 +70,20 @@ python niimprint -c usb -a /dev/ttyACM0 -r 90 -i examples/B21_30x15mm_240x120px.
 **B21, Bluetooth connection, 80x50 mm (640x384 px) label**
 
 ```
-python niimprint -c bluetooth -a "E2:E1:08:03:09:87" -r 90 -i examples/B21_80x50mm_640x384px.png
+python niimprint print -c bluetooth -a "E2:E1:08:03:09:87" -r 90 -i examples/B21_80x50mm_640x384px.png
 ```
 
 [![](examples/B21_80x50_result.png)]()
+
+**B21, Bluetooth connection devices**
+```
+python niimprint devices
+```
+
+command result:
+```bash
+b3:24:15:19:21:64 B21S-G135135671
+```
 
 ## Licence
 
