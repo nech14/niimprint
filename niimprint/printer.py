@@ -78,12 +78,13 @@ class PrinterClient:
         return packets
 
     async def _send(self, packet: NiimbotPacket):
+        # Раскомментируй строку ниже, если хочешь видеть спам из пакетов 0x85 в консоли
+        self._log_buffer("send", packet.to_bytes())
         transport = self._transport
         if isinstance(transport, BluetoothTransport):
             await self._transport.write(packet.to_bytes())
         else:
             await asyncio.to_thread(self._transport.write, packet.to_bytes())
-
 
     def _log_buffer(self, prefix: str, buff: bytes):
         msg = ":".join(f"{b:02x}" for b in buff)
