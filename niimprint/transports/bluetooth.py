@@ -1,6 +1,5 @@
 import asyncio
 import logging
-
 from bleak import BleakClient
 
 logger = logging.getLogger("BluetoothTransport")
@@ -9,21 +8,33 @@ CHARACTERISTIC_UUID = "bef8d6c9-9c21-4c9e-b632-bd58c1009f9f"
 
 
 class BluetoothTransport:
-    """BLE-транспорт для B21S."""
+    """BLE-транспорт для B21S с поддержкой Notifications."""
+
     def __init__(self, address: str):
         self.address = address
         self.client = BleakClient(address)
         self._connected = False
+        # Очередь для входящих пакетов от принтера
+        self.rx_queue = asyncio.Queue()
+
+    def _notification_handler(self, sender, data: bytearray):
+        # Bleak вызывает этот коллбек, когда принтер присылает ответ.
+        # Просто кладем байты в очередь.
+        self.rx_queue.put_nowait(bytes(data))
 
     async def connect(self):
         if not self._connected:
             await self.client.connect()
             self._connected = True
-            _ = self.client.services
-            logger.debug(f"Connected to {self.address} and services discovered")
+
+            # Подписываемся на ответы от принтера
+            await self.client.start_notify(CHARACTERISTIC_UUID, self._notification_handler)
+            logger.debug(f"Connected to {self.address} and subscribed to notifications")
 
     async def disconnect(self):
         if self._connected:
+            # Отписываемся перед отключением
+            await self.client.stop_notify(CHARACTERISTIC_UUID)
             await self.client.disconnect()
             self._connected = False
             logger.debug(f"Disconnected from {self.address}")
@@ -32,14 +43,19 @@ class BluetoothTransport:
         await self.connect()
         mtu = 20  # BLE ограничение на один пакет
         for i in range(0, len(data), mtu):
-            chunk = data[i:i+mtu]
+            chunk = data[i:i + mtu]
             await self.client.write_gatt_char(CHARACTERISTIC_UUID, chunk, response=False)
             await asyncio.sleep(0.01)
 
     async def read(self) -> bytes:
         await self.connect()
-        data = await self.client.read_gatt_char(CHARACTERISTIC_UUID)
-        return data
+        try:
+            # Ждем данные из очереди. Таймаут нужен, чтобы
+            # процесс не зависал намертво, если принтер молчит.
+            data = await asyncio.wait_for(self.rx_queue.get(), timeout=0.5)
+            return data
+        except asyncio.TimeoutError:
+            return b""
 
     async def handshake(self):
         await self.write(b"\x55\x55\x21\x01\x01\x21\xaa\xaa")
