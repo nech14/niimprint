@@ -1,6 +1,9 @@
 import asyncio
 import logging
-from bleak import BleakClient
+try:
+    from bleak import BleakClient
+except ImportError:  # BLE support is optional unless -c ble is used.
+    BleakClient = None
 
 logger = logging.getLogger("BluetoothTransport")
 
@@ -11,6 +14,8 @@ class BluetoothTransport:
     """BLE-транспорт для B21S с поддержкой Notifications."""
 
     def __init__(self, address: str):
+        if BleakClient is None:
+            raise RuntimeError("BLE transport requires the optional dependency bleak")
         self.address = address
         self.client = BleakClient(address)
         self._connected = False
@@ -44,8 +49,8 @@ class BluetoothTransport:
         mtu = 20  # BLE ограничение на один пакет
         for i in range(0, len(data), mtu):
             chunk = data[i:i + mtu]
-            await self.client.write_gatt_char(CHARACTERISTIC_UUID, chunk, response=False)
-            await asyncio.sleep(0.01)
+            await self.client.write_gatt_char(CHARACTERISTIC_UUID, chunk, response=True)
+            await asyncio.sleep(0.05)
 
     async def read(self) -> bytes:
         await self.connect()

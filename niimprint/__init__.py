@@ -1,2 +1,2 @@
 from .printer import PrinterClient
-from .transports import SerialTransport
+from .transports import BluetoothClassicTransport, BluetoothTransport, SerialTransport
